@@ -29,6 +29,15 @@ function IconRewind() {
     </svg>
   );
 }
+function IconDownload() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M7 1v8" strokeLinecap="round" />
+      <path d="M3.5 6.5L7 10l3.5-3.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M1.5 12h11" strokeLinecap="round" />
+    </svg>
+  );
+}
 function IconVolume({ muted }) {
   return muted ? (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
@@ -55,6 +64,8 @@ export default function TransportBar({
   onSetVolume,
   activeSection,
   fileName,
+  onExport,
+  isExporting,
 }) {
   const handleSeek = useCallback((e) => {
     const t = (parseFloat(e.target.value) / 1000) * duration;
@@ -167,6 +178,20 @@ export default function TransportBar({
           {sectionLabel}
         </div>
       )}
+
+      {/* Export / Download */}
+      <button
+        className="btn btn-cyan"
+        onClick={onExport}
+        disabled={isExporting}
+        id="btn-export"
+        aria-label="Export 8D audio as WAV"
+        title="Render and download as WAV"
+        style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}
+      >
+        <IconDownload />
+        {isExporting ? 'RENDERING…' : 'EXPORT MP3'}
+      </button>
 
       {/* File name */}
       {fileName && (
