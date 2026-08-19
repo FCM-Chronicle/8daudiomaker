@@ -113,6 +113,10 @@ export default function App() {
     engine.pause();
   }, [engine]);
 
+  const handleExport = useCallback(() => {
+    engine.exportAudio(fileName);
+  }, [engine, fileName]);
+
   const handleNewFile = useCallback(() => {
     engine.pause();
     setAppState('empty');
@@ -201,6 +205,8 @@ export default function App() {
               onSetVolume={engine.setVolume}
               activeSection={activeSection}
               fileName={fileName}
+              onExport={handleExport}
+              isExporting={engine.isExporting}
             />
 
             {/* Waveform Timeline */}
