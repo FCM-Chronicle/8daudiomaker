@@ -8,6 +8,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { getSectionPosition, getSectionReverb } from '../lib/spatialMotions';
 import { clamp } from '../lib/audioUtils';
+import { bufferToMp3Blob, downloadBlob, deriveExportFilename } from '../lib/audioExport';
 
 // Create impulse response for reverb convolver
 function createImpulseResponse(ctx, duration = 2.5, decay = 2.5) {
@@ -21,6 +22,14 @@ function createImpulseResponse(ctx, duration = 2.5, decay = 2.5) {
     }
   }
   return impulse;
+}
+
+// Find which section is active at time t within a given sections array
+function findActiveSection(sections, t) {
+  for (const s of sections) {
+    if (s.enabled && t >= s.start && t < s.end) return s;
+  }
+  return null;
 }
 
 export function useAudioEngine() {
@@ -43,6 +52,8 @@ export function useAudioEngine() {
   const [volume, setVolumeState] = useState(0.85);
   const [position3D, setPosition3D] = useState({ x: 0, y: 0, z: 1 });
   const [activeSectionId, setActiveSectionId] = useState(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
 
   // Sections ref (updated externally)
   const sectionsRef = useRef([]);
@@ -121,11 +132,7 @@ export function useAudioEngine() {
 
   /** Get active section at time t */
   const getActiveSection = useCallback((t) => {
-    const sections = sectionsRef.current;
-    for (const s of sections) {
-      if (s.enabled && t >= s.start && t < s.end) return s;
-    }
-    return null;
+    return findActiveSection(sectionsRef.current, t);
   }, []);
 
   /** Smooth position set using AudioParam ramps */
@@ -255,6 +262,123 @@ export function useAudioEngine() {
     sectionsRef.current = sections;
   }, []);
 
+  /**
+   * Render the full spatial mix offline and download it as a WAV file.
+   * Reuses the exact same panner/reverb graph as live playback, but
+   * schedules every position + reverb keyframe in advance (since
+   * OfflineAudioContext can't be driven by requestAnimationFrame) and
+   * renders faster than real time.
+   */
+  const exportAudio = useCallback(async (fileName) => {
+    const sourceBuffer = bufferRef.current;
+    if (!sourceBuffer) return;
+
+    setIsExporting(true);
+    setExportError(null);
+
+    try {
+      const sampleRate = sourceBuffer.sampleRate;
+      const numChannels = 2;
+      const totalDuration = sourceBuffer.duration;
+      const length = Math.ceil(totalDuration * sampleRate);
+
+      const offlineCtx = new OfflineAudioContext(numChannels, length, sampleRate);
+
+      // Rebuild the identical processing graph inside the offline context
+      const panner = offlineCtx.createPanner();
+      panner.panningModel = 'HRTF';
+      panner.distanceModel = 'inverse';
+      panner.refDistance = 1;
+      panner.maxDistance = 20;
+      panner.rolloffFactor = 0.5;
+      panner.coneInnerAngle = 360;
+      panner.coneOuterAngle = 0;
+      panner.coneOuterGain = 0;
+
+      const dryGain = offlineCtx.createGain();
+      dryGain.gain.value = 0.85;
+
+      const convolver = offlineCtx.createConvolver();
+      convolver.buffer = createImpulseResponse(offlineCtx);
+
+      const wetGain = offlineCtx.createGain();
+      wetGain.gain.value = 0.15;
+
+      const masterGain = offlineCtx.createGain();
+      masterGain.gain.value = volume;
+      masterGain.connect(offlineCtx.destination);
+
+      panner.connect(dryGain);
+      dryGain.connect(masterGain);
+      panner.connect(convolver);
+      convolver.connect(wetGain);
+      wetGain.connect(masterGain);
+
+      // Copy the source buffer into a fresh buffer usable by the offline context
+      const offlineSourceBuffer = offlineCtx.createBuffer(
+        sourceBuffer.numberOfChannels,
+        sourceBuffer.length,
+        sourceBuffer.sampleRate
+      );
+      for (let c = 0; c < sourceBuffer.numberOfChannels; c++) {
+        offlineSourceBuffer.copyToChannel(sourceBuffer.getChannelData(c), c);
+      }
+
+      const source = offlineCtx.createBufferSource();
+      source.buffer = offlineSourceBuffer;
+      source.connect(panner);
+
+      // Schedule position + reverb automation ahead of time, mirroring
+      // the logic in startAnimLoop() but driven by a fixed time step
+      // instead of rAF, since we know the whole timeline in advance.
+      const sections = sectionsRef.current;
+      const STEP = 0.05; // 50ms keyframes — smooth enough, cheap enough
+
+      panner.positionX.setValueAtTime(0, 0);
+      panner.positionY.setValueAtTime(0, 0);
+      panner.positionZ.setValueAtTime(1, 0);
+      wetGain.gain.setValueAtTime(0.15, 0);
+      dryGain.gain.setValueAtTime(0.85, 0);
+
+      let lastSectionId = null;
+      let lastSectionStart = 0;
+
+      for (let t = 0; t < totalDuration; t += STEP) {
+        const section = findActiveSection(sections, t);
+        const sectionType = (section?.enabled ? section.type : null) || 'verse';
+
+        if ((section?.id ?? null) !== lastSectionId) {
+          lastSectionId = section?.id ?? null;
+          lastSectionStart = t;
+        }
+
+        const sectionElapsed = t - lastSectionStart;
+        const sectionDur = section ? section.end - section.start : 10;
+
+        const pos = getSectionPosition(sectionType, sectionElapsed, sectionDur);
+        const reverbMix = getSectionReverb(sectionType, sectionElapsed, sectionDur);
+
+        panner.positionX.linearRampToValueAtTime(clamp(pos.x, -10, 10), t);
+        panner.positionY.linearRampToValueAtTime(clamp(pos.y, -10, 10), t);
+        panner.positionZ.linearRampToValueAtTime(clamp(pos.z, -10, 10), t);
+
+        wetGain.gain.linearRampToValueAtTime(reverbMix, t);
+        dryGain.gain.linearRampToValueAtTime(1 - reverbMix * 0.5, t);
+      }
+
+      source.start(0);
+      const renderedBuffer = await offlineCtx.startRendering();
+
+      const wavBlob = bufferToMp3Blob(renderedBuffer, 192);
+      downloadBlob(wavBlob, deriveExportFilename(fileName, 'mp3'));
+    } catch (err) {
+      console.error('Export failed:', err);
+      setExportError(err?.message || 'Export failed');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [volume]);
+
   // Cleanup
   useEffect(() => {
     return () => {
@@ -277,5 +401,8 @@ export function useAudioEngine() {
     activeSectionId,
     setSections,
     setCurrentTime,
+    exportAudio,
+    isExporting,
+    exportError,
   };
 }
