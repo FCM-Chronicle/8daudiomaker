@@ -74,8 +74,8 @@ export function getSectionPosition(type, t, duration) {
     }
 
     case 'verse': {
-      // L/R constant pan X: -3 ↔ 3
-      const period = 3;
+      // L/R constant pan X: -3 ↔ 3 (slower, period increased from 3s to 6s)
+      const period = 6;
       const x = 3 * Math.sin((t / period) * Math.PI * 2);
       return { x, y: 0, z: 0.5 };
     }
@@ -97,8 +97,8 @@ export function getSectionPosition(type, t, duration) {
     }
 
     case 'post-chorus': {
-      // Same orbit as chorus but faster + slight elevation
-      const angle = (t / 3.5) * Math.PI * 2;
+      // Same orbit as chorus but slower + slight elevation (period increased from 3.5s to 6s)
+      const angle = (t / 6) * Math.PI * 2;
       return {
         x: 3 * Math.sin(angle),
         y: 0.5 * progress,

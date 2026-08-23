@@ -11,19 +11,25 @@ import TransportBar from './components/TransportBar';
 import SectionPanel from './components/SectionPanel';
 import Visualizer3D from './components/Visualizer3D';
 import { useAudioEngine } from './hooks/useAudioEngine';
-import { computeWaveformData, detectSectionBoundaries } from './lib/audioUtils';
+import { computeWaveformData, detectSectionBoundaries, assignSectionTypes } from './lib/audioUtils';
 import { generateDefaultSections, SECTION_TYPES } from './lib/spatialMotions';
+import { convertAudioToWav } from './lib/ffmpegUtils';
 
 function StatusDot({ status }) {
   const cls = status === 'playing' ? 'playing' : status === 'loaded' ? 'active' : '';
   return <span className={`status-dot ${cls}`} />;
 }
 
-function AnalyzingOverlay() {
+function AnalyzingOverlay({ mode = 'analyzing' }) {
+  const title = mode === 'converting' ? 'Converting format...' : 'Analyzing audio structure…';
+  const subtitle = mode === 'converting' 
+    ? 'Using local WASM engine to prepare unsupported format'
+    : 'Detecting section boundaries via energy analysis';
+    
   return (
     <div className="analyzing-overlay" role="status" aria-live="polite">
       <div className="analyzing-ring" />
-      <div className="analyzing-text">Analyzing audio structure…</div>
+      <div className="analyzing-text">{title}</div>
       <div style={{
         fontFamily: 'var(--font-mono)',
         fontSize: '0.6rem',
@@ -31,7 +37,7 @@ function AnalyzingOverlay() {
         letterSpacing: '0.15em',
         textTransform: 'uppercase',
       }}>
-        Detecting section boundaries via energy analysis
+        {subtitle}
       </div>
     </div>
   );
@@ -59,32 +65,37 @@ export default function App() {
     setWaveformData(null);
     setSections([]);
 
+    let audioBuffer;
     try {
-      // Decode audio
-      const audioBuffer = await engine.loadBuffer(arrayBuffer.slice(0));
+      // Decode audio natively
+      audioBuffer = await engine.loadBuffer(arrayBuffer.slice(0));
+    } catch (err) {
+      console.warn('Native decoding failed, attempting WASM conversion...', err);
+      try {
+        setAppState('converting');
+        const wavBuffer = await convertAudioToWav(arrayBuffer.slice(0), fileName);
+        setAppState('analyzing');
+        audioBuffer = await engine.loadBuffer(wavBuffer);
+      } catch (conversionErr) {
+        console.error('WASM Conversion also failed:', conversionErr);
+        setAppState('ready'); // Fallback or show error
+        return;
+      }
+    }
+
+    try {
       setDecodedBuffer(audioBuffer);
 
       // Compute waveform display data
       const wfData = computeWaveformData(audioBuffer, 900);
       setWaveformData(wfData);
 
-      // Detect section boundaries
-      const boundaries = detectSectionBoundaries(audioBuffer, audioBuffer.duration);
-      const duration = audioBuffer.duration;
+      // Detect section boundaries (now async and returns dynamic number of boundaries)
+      const boundaries = await detectSectionBoundaries(audioBuffer, audioBuffer.duration);
 
-      // Build 8 sections from boundaries
-      const sectionTypes = SECTION_TYPES;
-      const allBoundaries = [0, ...boundaries, duration];
-      const newSections = [];
-      for (let i = 0; i < 8; i++) {
-        newSections.push({
-          id: i,
-          type: sectionTypes[i],
-          start: allBoundaries[i] || 0,
-          end: allBoundaries[i + 1] || duration,
-          enabled: true,
-        });
-      }
+      // Intelligently assign section types based on energy and position
+      const newSections = assignSectionTypes(boundaries, audioBuffer);
+      
       setSections(newSections);
       setAppState('ready');
     } catch (err) {
@@ -239,7 +250,7 @@ export default function App() {
       </main>
 
       {/* Analyzing overlay */}
-      {appState === 'analyzing' && <AnalyzingOverlay />}
+      {(appState === 'analyzing' || appState === 'converting') && <AnalyzingOverlay mode={appState} />}
     </div>
   );
 }

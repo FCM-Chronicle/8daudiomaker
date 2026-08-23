@@ -258,6 +258,65 @@ export default function WaveformTimeline({
     if (!dragging) setDragging(null);
   }, [dragging]);
 
+  const handleDoubleClick = useCallback((e) => {
+    const handle = findHandle(e.clientX);
+    const time = getTime(e.clientX);
+
+    if (handle) {
+      // Merge adjacent sections
+      const { sectionIdx } = handle;
+      if (sectionIdx > 0 && sectionIdx < sections.length) {
+        const merged = [];
+        for (let i = 0; i < sections.length; i++) {
+          if (i === sectionIdx - 1) {
+            // Extend this section to end of the next section
+            merged.push({
+              ...sections[i],
+              end: sections[sectionIdx].end
+            });
+          } else if (i === sectionIdx) {
+            // Skip the next section (it is merged into the previous one)
+            continue;
+          } else {
+            merged.push(sections[i]);
+          }
+        }
+        onSectionsChange(merged);
+      }
+    } else {
+      // Split section
+      const targetIdx = sections.findIndex(s => time >= s.start && time < s.end);
+      if (targetIdx !== -1) {
+        const sectionToSplit = sections[targetIdx];
+        const minDuration = 0.5; // At least 0.5s duration for a section
+        if (time - sectionToSplit.start < minDuration || sectionToSplit.end - time < minDuration) {
+          return; // Too close to existing boundary
+        }
+
+        const newId = Math.max(0, ...sections.map(s => s.id)) + 1;
+        const newSection1 = {
+          ...sectionToSplit,
+          end: time,
+        };
+        const newSection2 = {
+          id: newId,
+          type: sectionToSplit.type,
+          start: time,
+          end: sectionToSplit.end,
+          enabled: true,
+        };
+
+        const updated = [
+          ...sections.slice(0, targetIdx),
+          newSection1,
+          newSection2,
+          ...sections.slice(targetIdx + 1),
+        ];
+        onSectionsChange(updated);
+      }
+    }
+  }, [findHandle, getTime, sections, onSectionsChange]);
+
   return (
     <div className="waveform-section">
       <div className="waveform-header">
@@ -265,11 +324,11 @@ export default function WaveformTimeline({
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <span style={{
             fontFamily: 'var(--font-mono)',
-            fontSize: '0.65rem',
+            fontSize: '0.62rem',
             color: 'var(--text-muted)',
-            letterSpacing: '0.1em',
+            letterSpacing: '0.08em',
           }}>
-            {formatTimeShort(duration)} · DRAG MARKERS TO ADJUST
+            {formatTimeShort(duration)} · DBL-CLICK TO SPLIT · DBL-CLICK HANDLE TO MERGE · DRAG TO ADJUST
           </span>
         </div>
       </div>
@@ -282,6 +341,7 @@ export default function WaveformTimeline({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
+        onDoubleClick={handleDoubleClick}
       >
         <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: `${CANVAS_HEIGHT}px` }} />
       </div>
