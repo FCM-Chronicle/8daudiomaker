@@ -22,10 +22,10 @@ function StatusDot({ status }) {
 
 function AnalyzingOverlay({ mode = 'analyzing' }) {
   const title = mode === 'converting' ? 'Converting format...' : 'Analyzing audio structure…';
-  const subtitle = mode === 'converting' 
+  const subtitle = mode === 'converting'
     ? 'Using local WASM engine to prepare unsupported format'
     : 'Detecting section boundaries via energy analysis';
-    
+
   return (
     <div className="analyzing-overlay" role="status" aria-live="polite">
       <div className="analyzing-ring" />
@@ -95,7 +95,7 @@ export default function App() {
 
       // Intelligently assign section types based on energy and position
       const newSections = assignSectionTypes(boundaries, audioBuffer);
-      
+
       setSections(newSections);
       setAppState('ready');
     } catch (err) {
@@ -166,10 +166,10 @@ export default function App() {
               {engine.isPlaying
                 ? 'PLAYING'
                 : appState === 'ready'
-                ? 'LOADED'
-                : appState === 'analyzing'
-                ? 'ANALYZING'
-                : 'STANDBY'}
+                  ? 'LOADED'
+                  : appState === 'analyzing'
+                    ? 'ANALYZING'
+                    : 'STANDBY'}
             </span>
           </div>
 
@@ -254,4 +254,3 @@ export default function App() {
     </div>
   );
 }
-3e
